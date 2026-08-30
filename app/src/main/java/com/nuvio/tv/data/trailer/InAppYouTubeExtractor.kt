@@ -243,7 +243,11 @@ class InAppYouTubeExtractor @Inject constructor() {
         var source: TrailerPlaybackSource? = null
         try {
             source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
-                extractPlaybackSourceInternal(youtubeUrl, forceRefreshConfig = false)
+                extractPlaybackSourceInternal(
+                    youtubeUrl = youtubeUrl,
+                    forceRefreshConfig = false,
+                    preferCombined = false
+                )
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -256,7 +260,11 @@ class InAppYouTubeExtractor @Inject constructor() {
             Log.d(TAG, "First attempt failed, retrying with fresh watch config...")
             try {
                 source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
-                    extractPlaybackSourceInternal(youtubeUrl, forceRefreshConfig = true)
+                    extractPlaybackSourceInternal(
+                        youtubeUrl = youtubeUrl,
+                        forceRefreshConfig = true,
+                        preferCombined = false
+                    )
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -278,9 +286,65 @@ class InAppYouTubeExtractor @Inject constructor() {
         source
     }
 
+    /**
+     * Resolves a YouTube URL to a single playable source suitable for the
+     * full-screen Nuvio player. Prefer HLS/progressive sources that already
+     * contain audio so the player does not need a separate audio URL.
+     */
+    suspend fun extractCombinedPlaybackSource(youtubeUrl: String): TrailerPlaybackSource? =
+        withContext(Dispatchers.IO) {
+            if (youtubeUrl.isBlank()) return@withContext null
+
+            Log.d(TAG, "Starting combined YouTube extraction for ${summarizeUrl(youtubeUrl)}")
+            var source: TrailerPlaybackSource? = null
+
+            try {
+                source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
+                    extractPlaybackSourceInternal(
+                        youtubeUrl = youtubeUrl,
+                        forceRefreshConfig = false,
+                        preferCombined = true
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (error: Exception) {
+                Log.w(TAG, "Combined YouTube extractor failed for $youtubeUrl: ${error.message}")
+            }
+
+            if (source == null) {
+                try {
+                    source = withTimeout(EXTRACTOR_TIMEOUT_MS) {
+                        extractPlaybackSourceInternal(
+                            youtubeUrl = youtubeUrl,
+                            forceRefreshConfig = true,
+                            preferCombined = true
+                        )
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (error: Exception) {
+                    Log.w(TAG, "Combined YouTube extractor retry failed for $youtubeUrl: ${error.message}")
+                }
+            }
+
+            if (source == null) {
+                Log.w(TAG, "Combined YouTube extraction returned no playable source for ${summarizeUrl(youtubeUrl)}")
+            } else {
+                Log.d(
+                    TAG,
+                    "Combined YouTube extraction success for ${summarizeUrl(youtubeUrl)} " +
+                        "(video=${summarizeUrl(source.videoUrl)}, audioPresent=${!source.audioUrl.isNullOrBlank()})"
+                )
+            }
+
+            source
+        }
+
     private suspend fun extractPlaybackSourceInternal(
         youtubeUrl: String,
-        forceRefreshConfig: Boolean
+        forceRefreshConfig: Boolean,
+        preferCombined: Boolean
     ): TrailerPlaybackSource? {
         val videoId = extractVideoId(youtubeUrl) ?: return null
 
@@ -449,6 +513,24 @@ class InAppYouTubeExtractor @Inject constructor() {
         val bestProgressive = sortCandidates(progressive).firstOrNull()
         val bestVideo = pickBestForClient(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
         val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
+
+        // Full-screen playback needs a single source that already contains audio.
+        // Prefer HLS first (typically best quality for kids/COPPA content), then
+        // progressive MP4. If neither exists, fall back to the normal adaptive path.
+        if (preferCombined) {
+            if (bestManifest != null) {
+                return TrailerPlaybackSource(videoUrl = bestManifest.manifestUrl, audioUrl = null)
+            }
+
+            val combinedProgressive = bestProgressive?.url?.let { resolveReachableUrl(it) }
+            if (combinedProgressive != null) {
+                return TrailerPlaybackSource(videoUrl = combinedProgressive, audioUrl = null)
+            }
+
+            // Do not return a video-only adaptive source for the full-screen path.
+            // If no muxed/HLS source exists, report failure and let the UI retry.
+            return null
+        }
 
         // Try adaptive video + audio first (best quality, separate streams)
         kotlinx.coroutines.yield()

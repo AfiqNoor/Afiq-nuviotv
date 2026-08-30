@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Nuvio</string>
+    <string name="app_name">Afiq Nuvio</string>
     <string name="tv_channel_continue_watching">Continue Watching</string>
     <string name="type_movie">Movie</string>
     <string name="type_movies">Movies</string>
@@ -2862,6 +2862,7 @@
     <string name="player_stream_error_invalid_external_url">Invalid external URL</string>
     <string name="player_stream_error_open_external_link_failed">Unable to open external link</string>
     <string name="player_stream_error_invalid_url">Invalid stream URL</string>
+    <string name="youtube_stream_resolve_failed">Unable to prepare this YouTube video for in-app playback.</string>
     <string name="player_stream_error_missing_content_type">Missing content type</string>
 
     <!-- Meta repository: addon detail error fragments -->

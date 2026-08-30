@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.stream
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -32,6 +33,7 @@ import com.nuvio.tv.data.local.StreamAutoPlayMode
 import com.nuvio.tv.data.local.StreamBadgeSettingsDataStore
 import com.nuvio.tv.data.local.StreamLinkCacheDataStore
 import com.nuvio.tv.data.local.BingeGroupCacheDataStore
+import com.nuvio.tv.data.trailer.InAppYouTubeExtractor
 import com.nuvio.tv.domain.model.AddonStreams
 import com.nuvio.tv.domain.model.Meta
 import com.nuvio.tv.domain.model.Stream
@@ -66,6 +68,7 @@ import javax.inject.Inject
 
 private const val TAG = "StreamScreenViewModel"
 private const val DIRECT_AUTOPLAY_HARD_TIMEOUT_MS = 60_000L
+private val YOUTUBE_VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
 
 @HiltViewModel
 class StreamScreenViewModel @Inject constructor(
@@ -89,6 +92,7 @@ class StreamScreenViewModel @Inject constructor(
     private val subtitleRepository: com.nuvio.tv.domain.repository.SubtitleRepository,
     private val subtitleFileCache: com.nuvio.tv.core.player.SubtitleFileCache,
     private val torrentService: TorrentService,
+    private val inAppYouTubeExtractor: InAppYouTubeExtractor,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private var autoPlayHandledForSession = false
@@ -1114,7 +1118,109 @@ class StreamScreenViewModel @Inject constructor(
         }
     }
 
+    private fun Stream.youtubeVideoIdOrNull(): String? {
+        ytId?.trim()?.takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }?.let { return it }
+
+        val candidateUrls = listOfNotNull(url, externalUrl)
+        for (candidate in candidateUrls) {
+            val trimmed = candidate.trim()
+            if (YOUTUBE_VIDEO_ID_REGEX.matches(trimmed)) return trimmed
+
+            val normalized = if (
+                trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true)
+            ) {
+                trimmed
+            } else {
+                continue
+            }
+
+            val id = runCatching {
+                val uri = Uri.parse(normalized)
+                val host = uri.host?.lowercase().orEmpty()
+
+                if (host.endsWith("youtu.be")) {
+                    return@runCatching uri.pathSegments.firstOrNull()
+                        ?.takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }
+                }
+
+                if (host.endsWith("youtube.com") || host.endsWith("youtube-nocookie.com")) {
+                    uri.getQueryParameter("v")
+                        ?.takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }
+                        ?.let { return@runCatching it }
+
+                    val segments = uri.pathSegments
+                    if (segments.size >= 2 && segments[0] in setOf("embed", "shorts", "live")) {
+                        return@runCatching segments[1]
+                            .takeIf { YOUTUBE_VIDEO_ID_REGEX.matches(it) }
+                    }
+                }
+
+                null
+            }.getOrNull()
+
+            if (!id.isNullOrBlank()) return id
+        }
+
+        return null
+    }
+
+    private suspend fun resolveYouTubeStreamForPlayback(
+        stream: Stream,
+        youtubeVideoId: String
+    ): StreamPlaybackInfo? {
+        val showLoadingStatus = playerSettingsDataStore.playerSettings.first().showPlayerLoadingStatus
+        updateUiStateIfChanged {
+            it.copy(
+                showDirectAutoPlayOverlay = true,
+                directAutoPlayMessage = if (showLoadingStatus) {
+                    context.getString(R.string.player_loading_preparing)
+                } else {
+                    null
+                },
+                playbackErrorMessage = null
+            )
+        }
+
+        val youtubeUrl = "https://www.youtube.com/watch?v=$youtubeVideoId"
+        Log.d(TAG, "Resolving YouTube stream natively: id=$youtubeVideoId addon=${stream.addonName}")
+
+        val playbackSource = try {
+            inAppYouTubeExtractor.extractCombinedPlaybackSource(youtubeUrl)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Native YouTube resolve failed for id=$youtubeVideoId: ${e.message}", e)
+            null
+        }
+
+        val resolvedUrl = playbackSource?.videoUrl?.takeIf { it.isNotBlank() }
+        if (resolvedUrl == null) {
+            updateUiStateIfChanged {
+                it.copy(
+                    showDirectAutoPlayOverlay = false,
+                    directAutoPlayMessage = null,
+                    playbackErrorMessage = context.getString(R.string.youtube_stream_resolve_failed)
+                )
+            }
+            return null
+        }
+
+        val basePlaybackInfo = getStreamForPlayback(stream)
+        return basePlaybackInfo.copy(
+            url = resolvedUrl,
+            isExternal = false,
+            isTorrent = false,
+            ytId = youtubeVideoId,
+            headers = null
+        )
+    }
+
     suspend fun resolveStreamForPlayback(stream: Stream): StreamPlaybackInfo? {
+        stream.youtubeVideoIdOrNull()?.let { youtubeVideoId ->
+            return resolveYouTubeStreamForPlayback(stream, youtubeVideoId)
+        }
+
         if (!directDebridResolver.shouldResolveToPlayableStream(stream)) {
             Log.d(TAG, "resolveStreamForPlayback: no debrid resolve needed, using direct URL")
             return getStreamForPlayback(stream)

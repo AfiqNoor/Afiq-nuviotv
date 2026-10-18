@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build custom Nuvio fullDebug APK
+    name: Build standalone Afiq Nuvio APK
     runs-on: ubuntu-latest
 
     steps:
@@ -28,38 +28,86 @@ jobs:
           java-version: "17"
           cache: gradle
 
-      - name: Prepare local properties
+      - name: Restore app login configuration
+        env:
+          LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 }}
+          LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
         run: |
           touch local.properties
           touch local.dev.properties
 
+          if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
+          fi
+          if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
+          fi
+
+          # Explicit secrets override older property bundles, when configured.
+          if [ -n "$NUVIO_SUPABASE_URL" ]; then
+            printf '\nNUVIO_SUPABASE_URL=%s\n' "$NUVIO_SUPABASE_URL" >> local.dev.properties
+          fi
+          if [ -n "$NUVIO_SUPABASE_ANON_KEY" ]; then
+            printf '\nNUVIO_SUPABASE_ANON_KEY=%s\n' "$NUVIO_SUPABASE_ANON_KEY" >> local.dev.properties
+          fi
+
+          if grep -Eq '^NUVIO_SUPABASE_URL=https?://' local.dev.properties local.properties && \
+             grep -Eq '^NUVIO_SUPABASE_ANON_KEY=.' local.dev.properties local.properties; then
+            echo "Supabase login configuration is present (values not printed)."
+          else
+            echo "::warning::Supabase login keys missing. APK can install and run in guest mode, but account/QR login will not work. Set repository Actions secrets NUVIO_SUPABASE_URL and NUVIO_SUPABASE_ANON_KEY (public/anon key only), or LOCAL_DEV_PROPERTIES_BASE64."
+          fi
+
       - name: Prepare CI signing config
+        env:
+          AFIQ_SIGNING_KEYSTORE_BASE64: ${{ secrets.AFIQ_SIGNING_KEYSTORE_BASE64 }}
+          AFIQ_SIGNING_STORE_PASSWORD: ${{ secrets.AFIQ_SIGNING_STORE_PASSWORD }}
+          AFIQ_SIGNING_KEY_ALIAS: ${{ secrets.AFIQ_SIGNING_KEY_ALIAS }}
+          AFIQ_SIGNING_KEY_PASSWORD: ${{ secrets.AFIQ_SIGNING_KEY_PASSWORD }}
         run: |
-          keytool -genkeypair \
-            -v \
-            -keystore "$RUNNER_TEMP/ci-debug.jks" \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -dname "CN=Afiq Nuvio Debug,O=Afiq,C=MY" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000
+          if [ -n "$AFIQ_SIGNING_KEYSTORE_BASE64" ]; then
+            if [ -z "$AFIQ_SIGNING_STORE_PASSWORD" ] || [ -z "$AFIQ_SIGNING_KEY_ALIAS" ] || [ -z "$AFIQ_SIGNING_KEY_PASSWORD" ]; then
+              echo "::error::Afiq signing keystore provided, but alias/password secrets are incomplete."
+              exit 1
+            fi
+            printf '%s' "$AFIQ_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/afiq-ci-signing.jks"
+            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/afiq-ci-signing.jks" >> "$GITHUB_ENV"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$AFIQ_SIGNING_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$AFIQ_SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$AFIQ_SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "Using persistent Afiq signing key from repository secrets."
+          else
+            # One-time fallback only. New random keys cannot update the same
+            # package on later CI runs; configure a persistent key for updates.
+            echo "::warning::No AFIQ_SIGNING_KEYSTORE_BASE64 set. This APK is signed with a one-time key. Future updates may need an uninstall. Configure persistent signing secrets before adopting this as your main installation."
+            keytool -genkeypair \
+              -v \
+              -keystore "$RUNNER_TEMP/ci-debug.jks" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -dname "CN=Afiq Nuvio Debug,O=Afiq,C=MY" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
 
-          {
-            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/ci-debug.jks"
-            echo "NUVIO_RELEASE_KEY_ALIAS=androiddebugkey"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=android"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=android"
-          } >> "$GITHUB_ENV"
+            {
+              echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/ci-debug.jks"
+              echo "NUVIO_RELEASE_KEY_ALIAS=androiddebugkey"
+              echo "NUVIO_RELEASE_KEY_PASSWORD=android"
+              echo "NUVIO_RELEASE_STORE_PASSWORD=android"
+            } >> "$GITHUB_ENV"
+          fi
 
-      - name: Build fullDebug APK
-        run: ./gradlew :app:assembleFullDebug --stacktrace
+      - name: Build standalone fullDebug APK
+        run: ./gradlew :app:assembleFullDebug -PafiqStandaloneApk=true --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: afiq-nuvio-native-youtube
+          name: afiq-nuvio-standalone-apk
           path: app/build/outputs/apk/full/debug/app-full-universal-debug.apk
           if-no-files-found: error
           retention-days: 14

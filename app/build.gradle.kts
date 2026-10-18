@@ -334,7 +334,18 @@ android {
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
         val isPlaystore = variant.productFlavors.any { it.second == "playstore" }
-        variant.applicationId.set(if (isPlaystore) "com.nuvio.appdebug" else "com.nuviodebug.com")
+        // Opt-in only for the custom Afiq APK from GitHub Actions. The
+        // standalone package installs beside existing Nuvio/Nuvio Debug,
+        // so a differently signed APK never overwrites their local data.
+        val afiqStandalone = providers.gradleProperty("afiqStandaloneApk")
+            .orNull.equals("true", ignoreCase = true)
+        variant.applicationId.set(
+            when {
+                afiqStandalone && !isPlaystore -> "com.afiq.nuvio.tv"
+                isPlaystore -> "com.nuvio.appdebug"
+                else -> "com.nuviodebug.com"
+            }
+        )
     }
 }
 

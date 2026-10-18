@@ -104,10 +104,32 @@ jobs:
       - name: Build standalone fullDebug APK
         run: ./gradlew :app:assembleFullDebug -PafiqStandaloneApk=true --stacktrace
 
-      - name: Upload APK
+      - name: List APK variants and sizes
+        run: |
+          ls -lh app/build/outputs/apk/full/debug/*.apk
+
+      # Android TV often has little internal storage. ABI-specific APKs are
+      # much smaller than the universal APK because they exclude other CPUs.
+      - name: Upload TV ARM64 APK
         uses: actions/upload-artifact@v4
         with:
-          name: afiq-nuvio-standalone-apk
+          name: afiq-nuvio-tv-arm64
+          path: app/build/outputs/apk/full/debug/app-full-arm64-v8a-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload TV ARM32 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: afiq-nuvio-tv-arm32
+          path: app/build/outputs/apk/full/debug/app-full-armeabi-v7a-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Universal APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: afiq-nuvio-standalone-universal
           path: app/build/outputs/apk/full/debug/app-full-universal-debug.apk
           if-no-files-found: error
           retention-days: 14

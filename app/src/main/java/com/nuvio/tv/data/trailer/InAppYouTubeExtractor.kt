@@ -511,8 +511,12 @@ class InAppYouTubeExtractor @Inject constructor() {
         }
 
         val bestProgressive = sortCandidates(progressive).firstOrNull()
-        val bestVideo = pickBestForClient(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
-        val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
+        // A client may only expose 360p even when another exposes 1080p/4K.
+        // Rank actual available renditions first, then prefer its matching
+        // client's original audio so the video and audio session agree.
+        val bestVideo = sortCandidates(adaptiveVideo).firstOrNull()
+        val bestAudio = bestVideo?.let { pickBestForClient(adaptiveAudio, it.client) }
+            ?: pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
 
         // Full-screen playback needs a single source that already contains audio.
         // Prefer HLS first (typically best quality for kids/COPPA content), then
@@ -532,16 +536,25 @@ class InAppYouTubeExtractor @Inject constructor() {
             return null
         }
 
-        // Try adaptive video + audio first (best quality, separate streams)
+        // An HLS master playlist with HD renditions lets Media3 adapt quality
+        // to actual bandwidth without dropping audio. Keep low-resolution HLS
+        // behind a playable HD adaptive video + audio pair.
+        if (bestManifest != null && bestManifest.height >= 720) {
+            return TrailerPlaybackSource(videoUrl = bestManifest.manifestUrl, audioUrl = null)
+        }
+
         kotlinx.coroutines.yield()
         val resolvedVideo = bestVideo?.url?.let { resolveReachableUrl(it) }
         val resolvedAudio = if (resolvedVideo != null) bestAudio?.url?.let { resolveReachableUrl(it) } else null
 
-        if (resolvedVideo != null) {
+        // Never return a video-only DASH rendition: it would silently play
+        // without sound in Nuvio. MediaSource must merge both tracks.
+        if (resolvedVideo != null && resolvedAudio != null) {
+            Log.i(TAG, "Selected adaptive YouTube video ${bestVideo?.height}p with separate audio")
             return TrailerPlaybackSource(videoUrl = resolvedVideo, audioUrl = resolvedAudio)
         }
 
-        // Adaptive failed (403) — fall back to HLS manifest (1080p, always works for COPPA/kids content)
+        // Fallback to HLS, even when it tops out below HD.
         if (bestManifest != null) {
             return TrailerPlaybackSource(videoUrl = bestManifest.manifestUrl, audioUrl = null)
         }

@@ -14,6 +14,8 @@ import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import com.nuvio.tv.data.trailer.YouTubeAdaptiveAudioSession
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -186,10 +188,23 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         }
         val forceDefaultFactory = customExtractorsFactory != null || customSubtitleParserFactory != null
 
+        // YouTube's HD/4K formats often provide video and audio in separate
+        // signed URLs. Merge them as two Media3 sources before playback.
+        // This only activates for the in-memory YouTube session established
+        // during the native Afiq HUB stream resolve; other streams are unchanged.
+        fun withNativeYoutubeAudio(videoSource: MediaSource): MediaSource {
+            val separateAudioUrl = YouTubeAdaptiveAudioSession.audioUrlFor(url)
+                ?: return videoSource
+            Log.i("PlayerMediaSourceFactory", "Merging native YouTube adaptive video + audio")
+            val audioItem = MediaItem.Builder().setUri(separateAudioUrl).build()
+            val audioSource = defaultFactory.createMediaSource(audioItem)
+            return MergingMediaSource(true, videoSource, audioSource)
+        }
+
         // Sidecar subtitles are more reliable through DefaultMediaSourceFactory.
         if (subtitleConfigurations.isNotEmpty()) {
             return wrapAudioDelay(
-                mediaSource = defaultFactory.createMediaSource(mediaItem),
+                mediaSource = withNativeYoutubeAudio(defaultFactory.createMediaSource(mediaItem)),
                 audioDelayUsProvider = audioDelayUsProvider
             )
         }
@@ -204,7 +219,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 .createMediaSource(mediaItem)
             else -> defaultFactory.createMediaSource(mediaItem)
         }
-        return wrapAudioDelay(mediaSource = mediaSource, audioDelayUsProvider = audioDelayUsProvider)
+        return wrapAudioDelay(mediaSource = withNativeYoutubeAudio(mediaSource), audioDelayUsProvider = audioDelayUsProvider)
     }
 
     fun shutdown() {

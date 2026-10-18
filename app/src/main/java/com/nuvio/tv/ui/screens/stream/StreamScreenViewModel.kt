@@ -34,6 +34,7 @@ import com.nuvio.tv.data.local.StreamBadgeSettingsDataStore
 import com.nuvio.tv.data.local.StreamLinkCacheDataStore
 import com.nuvio.tv.data.local.BingeGroupCacheDataStore
 import com.nuvio.tv.data.trailer.InAppYouTubeExtractor
+import com.nuvio.tv.data.trailer.YouTubeAdaptiveAudioSession
 import com.nuvio.tv.domain.model.AddonStreams
 import com.nuvio.tv.domain.model.Meta
 import com.nuvio.tv.domain.model.Stream
@@ -1186,7 +1187,7 @@ class StreamScreenViewModel @Inject constructor(
         Log.d(TAG, "Resolving YouTube stream natively: id=$youtubeVideoId addon=${stream.addonName}")
 
         val playbackSource = try {
-            inAppYouTubeExtractor.extractCombinedPlaybackSource(youtubeUrl)
+            inAppYouTubeExtractor.extractPlaybackSource(youtubeUrl)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1205,6 +1206,11 @@ class StreamScreenViewModel @Inject constructor(
             }
             return null
         }
+
+        // Native Media3 playback can merge high-resolution video + separate audio.
+        // Keep the signed audio URL in memory, not in the navigation URL.
+        YouTubeAdaptiveAudioSession.register(resolvedUrl, playbackSource.audioUrl)
+        Log.i(TAG, "YouTube in-app source: separateAudio=${!playbackSource.audioUrl.isNullOrBlank()}")
 
         val basePlaybackInfo = getStreamForPlayback(stream)
         return basePlaybackInfo.copy(

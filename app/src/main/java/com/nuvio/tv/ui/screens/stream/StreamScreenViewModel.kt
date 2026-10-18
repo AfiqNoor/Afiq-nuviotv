@@ -1209,8 +1209,8 @@ class StreamScreenViewModel @Inject constructor(
 
         // Native Media3 playback can merge high-resolution video + separate audio.
         // Keep the signed audio URL in memory, not in the navigation URL.
-        YouTubeAdaptiveAudioSession.register(resolvedUrl, playbackSource.audioUrl)
-        Log.i(TAG, "YouTube in-app source: separateAudio=${!playbackSource.audioUrl.isNullOrBlank()}")
+        YouTubeAdaptiveAudioSession.register(resolvedUrl, playbackSource?.audioUrl)
+        Log.i(TAG, "YouTube in-app source: separateAudio=${!playbackSource?.audioUrl.isNullOrBlank()}")
 
         val basePlaybackInfo = getStreamForPlayback(stream)
         return basePlaybackInfo.copy(

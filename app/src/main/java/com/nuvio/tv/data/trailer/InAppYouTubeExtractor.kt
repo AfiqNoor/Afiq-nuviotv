@@ -511,8 +511,12 @@ class InAppYouTubeExtractor @Inject constructor() {
         }
 
         val bestProgressive = sortCandidates(progressive).firstOrNull()
-        val bestVideo = pickBestForClient(adaptiveVideo, PREFERRED_SEPARATE_CLIENT)
-        val bestAudio = pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
+        // A client may only expose 360p even when another exposes 1080p/4K.
+        // Rank actual available renditions first, then prefer its matching
+        // client's original audio so the video and audio session agree.
+        val bestVideo = sortCandidates(adaptiveVideo).firstOrNull()
+        val bestAudio = bestVideo?.let { pickBestForClient(adaptiveAudio, it.client) }
+            ?: pickBestForClient(adaptiveAudio, PREFERRED_SEPARATE_CLIENT)
 
         // Full-screen playback needs a single source that already contains audio.
         // Prefer HLS first (typically best quality for kids/COPPA content), then

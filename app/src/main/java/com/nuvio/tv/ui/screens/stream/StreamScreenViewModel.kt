@@ -400,7 +400,11 @@ class StreamScreenViewModel @Inject constructor(
                 }
             }
 
-            if (!autoPlayHandledForSession && playerSettings.streamReuseLastLinkEnabled) {
+            // Afiq HUB YouTube signed URLs expire and older cached selections
+            // were often 360p-only. Always resolve a fresh source for ytch IDs.
+            if (!autoPlayHandledForSession && playerSettings.streamReuseLastLinkEnabled &&
+                !videoId.startsWith("ytch:")
+            ) {
                 val cached = streamLinkCacheDataStore.getValid(
                     contentKey = streamCacheKey,
                     maxAgeMs = playerSettings.streamReuseLastLinkCacheHours * 60L * 60L * 1000L
